@@ -6,6 +6,7 @@ import { ShredClock } from '../../effects/shred-clock.ts';
 import type { DamageComponent, PhaseResult } from '../../types.ts';
 import { battleEffects } from '../../effects/common.ts';
 import { advanceNecrosis, necrosisProfile } from '../../effects/elemental.ts';
+import { artsFraction } from '../../damage.ts';
 import { arcaneOnly, overrideBase, phase } from './shared.ts';
 import type { SkillOverride } from './index.ts';
 
@@ -17,6 +18,8 @@ export const nymphOverride: SkillOverride = (context, generic) => {
   const bb = level.blackboard.nums, talent = tier.talents[0]!.blackboard.nums, stacksTalent = tier.talents[1]!.blackboard.nums;
   const s1 = skill.skillId.endsWith('_1'), s2 = skill.skillId.endsWith('_2');
   const profile = necrosisProfile(boss), source = `skill:${skill.skillId}`;
+  // 笞心击、怵然震爆的黑板均按实际法术伤害积累。机械臂的概率分支可分别打出物理、法术伤害。
+  const buildupRatio = (hit: DamageComponent) => artsFraction(hit) * (bb['attack@ep_damage_ratio'] ?? bb.ep_damage_ratio ?? 0);
   const cost = Math.max(e.spCostMin, level.spCost * e.spCostScale);
   const rate = Math.max(0, level.increment + e.spRecovery);
   const burstSp = tier.talents.find(slot => slot.blackboard.nums.sp_recovery_per_sec)?.blackboard.nums.sp_recovery_per_sec ?? 0;
@@ -86,7 +89,8 @@ export const nymphOverride: SkillOverride = (context, generic) => {
       add(p.components, 0);
       clock.burst(p.components);
       if (state.remaining === 0) {
-        state.buildup += p.components[0]!.perHit * bb.ep_damage_ratio! * profile.buildupMultiplier;
+        const hit = p.components[0]!;
+        state.buildup += hit.perHit * buildupRatio(hit) * profile.buildupMultiplier;
         if (advanceNecrosis(state, profile, 0, 0).triggered) trigger();
       }
       if (state.remaining > 0) soulScale = Math.max(soulScale, bb.element_atk_scale!);
@@ -128,7 +132,7 @@ export const nymphOverride: SkillOverride = (context, generic) => {
       const due = boost ? time + (nextCast - time) / (1 + boost) : nextCast;
       const stop = Math.min(time + tick.seconds, due, splashAt, skillEnd, expiry, duration > time ? duration : Infinity,
         collect && displayEnd > time ? displayEnd : Infinity, collect && cycleEnd > time ? cycleEnd : Infinity) - time;
-      const rawRate = active && s1 ? p.components[0]!.dps * bb['attack@ep_damage_ratio']! : 0;
+      const rawRate = active && s1 ? p.components[0]!.dps * buildupRatio(p.components[0]!) : 0;
       const step = advanceNecrosis(state, profile, rawRate, Math.max(0, stop));
       if (!Number.isFinite(step.seconds)) {
         const seconds = Math.max(0, duration - time, Number.isFinite(hp) && p.dps > 0 ? (hp - dealt) / p.dps : 0);
@@ -157,8 +161,8 @@ export const nymphOverride: SkillOverride = (context, generic) => {
   base.caveats.push('单干员普攻及S3不积累凋亡；无队友触发时，S3元素转换、失魂和爆发叠攻不触发。',
     '静止Boss不模拟恐惧移动；额外目标不重复命中，S2溅射明确包含主目标。凋亡虚弱不影响不受击场景DPS。');
   return { ...base, normal, skill: skillPhase, lifecycle: s2 ? 'instant' : 'timed', duration: s2 ? 0 : level.duration, burst: s2, passive: false,
-    elemental: { perSec: s1 ? initial.components[0]!.dps * bb['attack@ep_damage_ratio']! * profile.buildupMultiplier
-      : s2 ? 2 * initial.components[0]!.perHit * bb.ep_damage_ratio! * profile.buildupMultiplier / (actualCycle?.seconds ?? recovery) : 0,
+    elemental: { perSec: s1 ? initial.components[0]!.dps * buildupRatio(initial.components[0]!) * profile.buildupMultiplier
+      : s2 ? 2 * initial.components[0]!.perHit * buildupRatio(initial.components[0]!) * profile.buildupMultiplier / (actualCycle?.seconds ?? recovery) : 0,
       note: 'S1首次技能未爆发时的损伤速率；S2两段损伤按回转平均；普攻与S3为0，15秒爆发期间不积累。' },
     customTimeline: (duration, hp) => {
       const swiftNotes:string[]=[];

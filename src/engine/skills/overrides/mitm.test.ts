@@ -13,13 +13,13 @@ const target=(tier:ChessTier,slot:number,durationSec:number,bossId='boss_1',boss
   charId:'char_4147_mitm',tier,skillId:'skchr_mitm_'+slot,bossId,modeId:'mode_single_10',durationSec,bossMechanics,bonds:[],equips:[],
 }).totalDamage.value;
 
-function curve(slot:number,bossId:string,targetHp:number,overrides:Partial<SkillLevelData>={}) {
+function rotation(slot:number,bossId:string,targetHp:number,overrides:Partial<SkillLevelData>={},window=40) {
   const operator=(operators as unknown as OperatorData[]).find(o=>o.name==='渡桥')!,tier=operator.tiers.b;
   const boss=(bosses as unknown as BossData[]).find(o=>o.bossId===bossId)!;
   const skill=(skills as unknown as Record<string,SkillData>)[operator.skillIds[slot-1]!]!;
   const level={...skill.levels['7'],...overrides} as SkillLevelData;
   const base=generic(operator,tier,skill,level,boss);
-  return timeline(mitmOverride({operator,tier,skill,level,boss,targetHp},base),level,40,Infinity).at!;
+  return timeline(mitmOverride({operator,tier,skill,level,boss,targetHp},base),level,window,Infinity);
 }
 
 it.each([
@@ -46,12 +46,42 @@ it('矩兽的初始占用为2挡，只有真车开启二技能才够挡',()=>{
   const at=(t:number)=>target('b',2,t,'boss_17',{might:false});
   expect(at(1.01)-at(.99)).toBeCloseTo(phys(a),7);
   expect(at(27.01)-at(26.99)).toBeCloseTo(phys(a*1.6*1.65),7);
-  const low=curve(2,'boss_17',1);
+  const low=rotation(2,'boss_17',1).at!;
   expect(low(27.01)-low(26.99)).toBeCloseTo(phys(a*1.6),7);
 });
 
+it('渡桥对矩兽的首开前、技能期和击杀时间不随展示窗口变化', () => {
+  const run = (durationSec: number) => calculate({
+    charId: 'char_4147_mitm', tier: 'a', skillId: 'skchr_mitm_2', bossId: 'boss_17',
+    modeId: 'mode_single_9', cultivation: 2060, potential: 5, bonds: [], equips: [], durationSec,
+  });
+  // 四级二技能 47−15=32 秒首开，持续15秒。本体每28帧、小车每38帧出手。
+  // 开技前分别命中34、25次；技能期小车停攻，本体命中16次并取得阻挡倍率。明力减伤20%。
+  const body = phys(429.87681159420293) * .8;
+  const car = phys(246.72463768115944) * .8;
+  const enhanced = phys(429.87681159420293 * 1.45 * 1.5) * .8;
+  const before = 34 * body + 25 * car;
+  const long = run(90);
+  for (const result of [run(0), run(30), run(32), long]) {
+    expect(result.normal.dps).toBeCloseTo(before / 32, 7);
+    expect(result.skill!.dps).toBeCloseTo(16 * enhanced / 15, 7);
+    expect(result.killTimeSec).toBeCloseTo(long.killTimeSec, 6);
+  }
+  expect(run(32).totalDamage.value).toBeCloseTo(before, 7);
+  expect(run(47).totalDamage.value).toBeCloseTo(before + 16 * enhanced, 7);
+});
+
+it('短窗口也能区分 200 秒才首开的技能和从不回复技力的技能', () => {
+  const level = { spCost: 200, initSp: 0 };
+  const late = rotation(2, 'boss_17', Infinity, level, 1);
+  expect(late.firstSkill!.start).toBeCloseTo(200, 8);
+  expect(late.firstSkill!.end).toBeCloseTo(215, 8);
+  const never = rotation(2, 'boss_17', Infinity, { ...level, increment: 0 }, 1);
+  expect(never.firstSkill?.start).toBe(Infinity);
+});
+
 it('残骸期间再次施放一技能不产生爆炸，也不推迟真车刷新',()=>{
-  const at=curve(1,'boss_1',Infinity,{spCost:5,initSp:0});
+  const at=rotation(1,'boss_1',Infinity,{spCost:5,initSp:0}).at!;
   const a=491.5189873417722;
   expect(at(5.01)-at(4.99)).toBeCloseTo(phys(a*3.55)+phys(a),7);
   expect(at(10.01)-at(9.99)).toBeCloseTo(phys(a),7);

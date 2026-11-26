@@ -21,15 +21,24 @@ function memo(at: Curve): Curve {
   };
 }
 
+/** 来源：项目装备增伤模型。同一时刻生效的各件装备倍率相乘，包含同名副本。 */
+export function timedDamageScaleAt(steps: BattleEffects['timedDamageScale'], t: number) {
+  return steps.reduce((scale, s) => t >= s.from && t < s.until ? scale * s.scale : scale, 1);
+}
+
 /**
  * 按部署后时间变化的伤害倍率：[from, until) 内造成的伤害整体 ×scale。
  * 倍率与其他增伤分区相乘，等价于把这段时间内的累计伤害增量放大。
  */
 export function scaledCurve(at: Curve, steps: BattleEffects['timedDamageScale']): Curve {
+  const boundaries = [...new Set(steps.flatMap(s => [s.from, s.until]))].sort((a, b) => a - b);
+  const windows = boundaries.slice(0, -1).map((from, i) => ({
+    from, until: boundaries[i + 1]!, scale: timedDamageScaleAt(steps, from),
+  })).filter(s => s.scale !== 1);
   return t => {
     let sum = at(t);
-    for (const s of steps) {
-      if (t < s.from) continue;
+    for (const s of windows) {
+      if (t < s.from) break;
       // 部署瞬间（0 秒）的瞬时伤害也在倍率内。
       const start = leftLimit(at, s.from);
       const end = t < s.until ? at(t) : leftLimit(at, s.until);
@@ -48,42 +57,40 @@ export interface BurningOptions {
   burst: number;
   /** 法术伤害在锁条期间的增量：(减抗后 / 减抗前 − 1) × 法术伤害占比。 */
   windowGain: number;
-  /** 逐次求爆条时刻的时间上限；之后按已求出的平均速率延续。 */
+  /** bursts() 列出此窗口内的爆发，击杀查询可以继续推进。 */
   horizon: number;
 }
 /** 在累计伤害曲线上推进灼燃条：按累计伤害求每次爆条时刻，计入爆发伤害和锁条期间的减抗增伤。 */
 export function burningCurve(at: Curve, o: BurningOptions) {
   const bursts: number[] = [];
   let resume = 0;
-  let done = !(o.rate > 0);
-  const ensure = () => {
-    while (!done && resume <= o.horizon) {
-      const target = at(resume) + o.threshold / o.rate;
-      const hit = firstCrossing(at, target, Math.max(resume + 1, 1));
-      if (!Number.isFinite(hit) || hit > o.horizon) { done = true; break; }
+  const ensure = (t: number) => {
+    if (!(o.rate > 0)) return;
+    const damage = at(t);
+    while (resume <= t) {
+      // 部署与锁条结束当帧的伤害也能积累。没有后续伤害时，等待真正达到阈值再产生下一次爆发。
+      const target = leftLimit(at, resume) + o.threshold / o.rate;
+      if (damage < target) break;
+      // 已确认 t 的累计伤害足够，搜索只需要读取 [resume, t] 内的事件。
+      const delay = firstCrossing(elapsed => at(Math.min(t, resume + elapsed)), target, 1);
+      const hit = Math.min(t, resume + delay);
       bursts.push(hit);
       resume = hit + o.lock;
     }
   };
-  const part = (b: number, t: number) => t < b ? 0 : o.burst + o.windowGain * (at(Math.min(t, b + o.lock)) - at(b));
-  let steady: number | undefined;
-  const steadyRate = () => {
-    if (steady !== undefined) return steady;
-    ensure();
-    if (bursts.length >= 2) {
-      const period = (bursts.at(-1)! - bursts[0]!) / (bursts.length - 1);
-      const each = bursts.slice(0, -1).reduce((n, b) => n + part(b, b + o.lock), 0) / (bursts.length - 1);
-      steady = period > 0 ? each / period : 0;
-    } else steady = o.horizon > 0 ? extraUpTo(o.horizon) / o.horizon : 0;
-    return steady;
+  const part = (b: number, t: number) => {
+    if (t < b) return 0;
+    const end = b + o.lock;
+    const during = (t < end ? at(t) : leftLimit(at, end)) - at(b);
+    return o.burst + o.windowGain * during;
   };
-  const extraUpTo = (t: number) => bursts.reduce((n, b) => n + part(b, t), 0);
-  const extra = (t: number) => {
-    ensure();
-    const within = extraUpTo(Math.min(t, o.horizon));
-    return t > o.horizon ? within + (t - o.horizon) * steadyRate() : within;
+  return {
+    at: (t: number) => {
+      ensure(t);
+      return at(t) + bursts.reduce((sum, b) => sum + part(b, t), 0);
+    },
+    bursts: () => { ensure(o.horizon); return bursts.filter(b => b <= o.horizon); },
   };
-  return { at: (t: number) => at(t) + extra(t), bursts: () => { ensure(); return [...bursts]; } };
 }
 
 const artsDps = (phase: PhaseResult | null | undefined) =>

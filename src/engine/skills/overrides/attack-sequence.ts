@@ -60,7 +60,7 @@ export function sequenceTimeline(model: SequenceModel, level: SkillLevelData, wi
   const counts = initial.stacks.map(() => 0);
   let current = model, damageEvents = 0, progress = 0, remaining = 0, lockedUntil = 0;
   let nextSecond = 1, firstNormal: PhaseResult | undefined, firstActive: PhaseResult | undefined;
-  let cacheKey = '', noFutureDamage = false;
+  let cacheKey = '', noFutureDamage = false, firstCastReachable = true;
   const damageEventLimit = Math.max(initial.resShred ? Math.ceil(initial.resShred.max / initial.resShred.perHit) : 0,
     initial.bondStacks ? Math.ceil(initial.bondStacks.max / initial.bondStacks.perDamage) : 0);
   const boundaries = [...initial.timedStats.map(s => s.until), ...(model.breakpoints ?? [])];
@@ -153,11 +153,16 @@ export function sequenceTimeline(model: SequenceModel, level: SkillLevelData, wi
     const pulse = current.sequence?.pulse?.(state);
     const attackReadyAt = current.sequence?.attackReadyAt?.(state) ?? -Infinity;
     while (boundaryIndex < boundaries.length && boundaries[boundaryIndex]! <= state.time + 1e-8) boundaryIndex++;
+    const nextChange = Math.min(current.sequence?.next?.(state) ?? Infinity, boundaries[boundaryIndex] ?? Infinity,
+      initial.stacks.some((s,i) => s.trigger === 'second' && counts[i]! < s.max) ? nextSecond : Infinity);
+    if (!state.casts) {
+      const canCharge = state.sp >= cost - 1e-9 || rate > 0 || (level.spType === 'ON_ATTACK' && level.increment > 0 && attacks);
+      firstCastReachable = !!current.skill && limit > 0 && (Number.isFinite(nextChange)
+        || (canCharge && (!current.sequence?.castOnAttack || attacks)));
+    }
     const next = Math.min(pulse ? pulse.at - state.time : Infinity,
       state.elementActive ? elementEnd - state.time : accumulation > 0 ? (trait!.threshold - buildup) / accumulation : Infinity, attacks ? Math.max((1 - progress) * interval, attackReadyAt - state.time) : Infinity, state.active ? remaining : Infinity,
-      skillReadyIn, current.sequence?.next ? current.sequence.next(state) - state.time : Infinity,
-      (boundaries[boundaryIndex] ?? Infinity) - state.time,
-      initial.stacks.some((s,i) => s.trigger === 'second' && counts[i]! < s.max) ? nextSecond - state.time : Infinity);
+      skillReadyIn, nextChange - state.time);
     if (!(next > 1e-9)) throw new Error('逐击模型的下一事件未推进');
     const damageRate = current.sequence?.discreteAttacks ? dotDps(p) : p.dps;
     track.push({ duration:next, dps:damageRate + (state.elementActive ? trait?.burstDps ?? 0 : 0) });
@@ -209,6 +214,9 @@ export function sequenceTimeline(model: SequenceModel, level: SkillLevelData, wi
         kill = firstCrossing(at, hp, hp / Math.max(1, sample));
       }
     }
+    // 短窗口可能先于首次施放。取阶段快照时只推进到首开，已算出的窗口总伤保持在原查询时刻。
+    // 能回复技力或有下一次面板变化时才继续；无法回复的干员即使一直普攻，也不会无限预读。
+    while (!track.casts.length && firstCastReachable && Number.isFinite(state.time)) step();
     const first = track.casts[0] ?? Infinity;
     const cycle = track.casts.length > 1 ? { spRecoverSec:Math.max(0,track.casts[1]! - (track.ends[0] ?? first)),
       skillDurationSec:model.duration, avgDps:totalDamage / Math.max(1,duration) } : null;

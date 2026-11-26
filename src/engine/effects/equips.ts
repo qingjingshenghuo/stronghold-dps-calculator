@@ -35,6 +35,7 @@ export interface EquipContext {
   /** 盟约输入与携带者所属盟约，用于“同盟约的其他干员”计数。 */
   bonds?: BondSetting[];
   memberBondIds?: string[];
+  hasActiveMemberBond?: boolean;
   /** 终极维式重锤：场上带特殊效果的维式重锤（装备名）；缺省按 5 种都在场。 */
   fieldHammers?: string[];
 }
@@ -65,19 +66,20 @@ export function splashReady(e: Pick<BattleEffects, 'splash'>, modifiers: StatMod
  * 组合装备占用前一件的位置。
  */
 export function combineEquips(list: EquipData[]): { equips: EquipData[]; combined: { from: [string, string]; to: EquipData }[] } {
-  let equips = [...list];
+  const equips = [...list];
   const combined: { from: [string, string]; to: EquipData }[] = [];
   for (let changed = true; changed;) {
     changed = false;
-    for (const item of equips) {
+    for (const [slot, item] of equips.entries()) {
       const match = item.desc.replace(/<[^>]*>/g, '').match(/若与“(.+?)”同时持有则组合为“(.+?)”/);
       if (!match) continue;
-      const partner = equips.find(x => x !== item && x.name === match[1]);
+      const partnerSlot = equips.findIndex((x, index) => index !== slot && x.name === match[1]);
       const result = allEquips.find(x => x.name === match[2]);
-      if (!partner || !result) continue;
-      const first = Math.min(equips.indexOf(item), equips.indexOf(partner));
-      equips = equips.filter(x => x !== item && x !== partner);
-      equips.splice(first, 0, result);
+      if (partnerSlot < 0 || !result) continue;
+      const partner = equips[partnerSlot]!;
+      // 同名副本共享数据对象；合成只消耗选中的两个槽位。
+      equips[Math.min(slot, partnerSlot)] = result;
+      equips.splice(Math.max(slot, partnerSlot), 1);
       combined.push({ from: [item.name, partner.name], to: result });
       changed = true;
       break;
@@ -130,8 +132,8 @@ export function applyEquips(e: BattleEffects, equips: EquipData[], activeBondCou
     // “造成法术伤害时附带相当于10%伤害的灼燃损伤”：damage_scale 是灼燃损伤占法术伤害的比例。
     const burning = (ratio: number) => {
       e.burning = { ratio: (e.burning?.ratio ?? 0) + ratio, source };
-      assume(`灼燃损伤：法术伤害的 ${ratio * 100}% 积累灼燃损伤；爆条后造成 7000 元素伤害并使法术抗性 -20 持续 10 秒，期间不积累。按 180 秒时间过程计入总伤，技能期/非技能期面板不含`,
-        ratio, `法术伤害的 ${ratio * 100}% 积累灼燃损伤，爆发伤害与减抗只计入 180 秒总伤`);
+      assume(`灼燃损伤：法术伤害的 ${ratio * 100}% 积累灼燃损伤；爆条后造成 7000 元素伤害并使法术抗性 -20 持续 10 秒，期间不积累。爆发和减抗增伤按实际时刻计入伤害曲线`,
+        ratio, `法术伤害的 ${ratio * 100}% 积累灼燃损伤，按达到阈值的时刻计入爆发伤害`);
     };
     if (unrelated.has(equip.name)) continue;
     if (unsupported[equip.name]) { note(unsupported[equip.name]); continue; }
@@ -222,9 +224,17 @@ export function applyEquips(e: BattleEffects, equips: EquipData[], activeBondCou
         break;
       }
       case '多功能补剂': {
+        if (context.hasActiveMemberBond === false) break;
         const n = nums('act3autochess_equip_acarm131_global_buff');
-        e.bondStacks = { perDamage: n.temp_stack_count_add!, max: n.temp_stack_count_max!, source };
+        const prior = e.bondStacks;
+        const perDamage = (prior?.perDamage ?? 0) + n.temp_stack_count_add!;
+        const max = Math.max(prior?.max ?? 0, n.temp_stack_count_max!);
+        e.bondStacks = { perDamage, max, source: prior?.max === max ? prior.source : source };
         record(e, source, '每次伤害临时盟约层数', n.temp_stack_count_add!);
+        // PRTS「卫戍协议·规程/PRTS盟约记录」多功能补剂备注称获得量可叠加、上限不叠加（存疑）。
+        // https://prts.wiki/w/盟约记录#多功能补剂
+        if (prior) assume(`按多件补剂每击层数相加、上限取最高计算（PRTS 备注存疑）：每击 +${perDamage}，最多 ${max} 层`,
+          max, `每击共增加 ${perDamage} 层，上限取最高的 ${max} 层`);
         note('近似：仅按本干员原攻击及附加伤害的已建模段数增加所属激活盟约，未计未建模伤害触发；同击结算后加层');
         break;
       }
@@ -303,8 +313,8 @@ export function applyEquips(e: BattleEffects, equips: EquipData[], activeBondCou
           e.timedDamageScale.push({ from: n.interval! + n.ex_interval! * (k - 1), until: n.interval! + n.ex_interval! * k, scale, source });
         }
         const end = e.timedDamageScale.at(-1)!.until;
-        assume(`卡西米尔竞技旗：部署后 ${n.interval} 秒内造成的伤害 ×${n.damage_scale}，之后每 ${n.ex_interval} 秒 ${n.damage_scale_minus}，第 ${end} 秒回到 ×1（与其他增伤分区相乘）；按 180 秒时间过程计入总伤，技能期/非技能期面板不含`,
-          n.damage_scale!, `部署后 ${n.interval} 秒内伤害 ×${n.damage_scale}，随后逐渐衰减，只计入 180 秒总伤`);
+        assume(`卡西米尔竞技旗：部署后 ${n.interval} 秒内造成的伤害 ×${n.damage_scale}，之后每 ${n.ex_interval} 秒 ${n.damage_scale_minus}，第 ${end} 秒回到 ×1（与其他装备增伤相乘，同时生效的竞技旗也逐件相乘）；窗口总伤按各时段倍率结算`,
+          n.damage_scale!, `部署后 ${n.interval} 秒内伤害 ×${n.damage_scale}，随后逐渐衰减，按命中时刻计入总伤`);
         break;
       }
       case '瓶装烈性反应': {

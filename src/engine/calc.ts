@@ -10,7 +10,7 @@ import { battleEffects, type BattleEffects } from './effects/common.ts';
 import { grantedSkillBonds } from './effects/granted-skill-bonds.ts';
 import { applyBonds, memberBondIds } from './effects/bonds.ts';
 import { applyEquips, combineEquips } from './effects/equips.ts';
-import { equipCurve } from './equip-curve.ts';
+import { equipCurve, timedDamageScaleAt } from './equip-curve.ts';
 import { record } from './effects/common.ts';
 import { applyGarrisons } from './effects/garrisons.ts';
 import { combatTarget } from './damage.ts';
@@ -123,25 +123,37 @@ function simulate(input: CalcInput, windowOnly: boolean, window?: SwiftWindow): 
   if (settings.length !== input.bonds.length) external.notes.push('重复盟约配置仅取最后一项，不重复叠加');
   applyBonds(external, [...bonds.values()], settings, operator, tier, selected);
   const membership = new Set(memberBondIds(operator, selected.map(equip => equip.chessId), selected));
-  const equipContext = (bondSettings: typeof settings) => ({ boss, bonds: bondSettings, memberBondIds: [...membership],
+  const activeBonds = settings.filter(s => s.activeChars >= bonds.get(s.bondId)!.activeCount);
+  const activeMemberBonds = new Set(activeBonds.map(s => s.bondId).filter(id => membership.has(id)));
+  const equipContext = (bondSettings: typeof settings) => ({
+    boss, bonds: bondSettings, memberBondIds: [...membership], hasActiveMemberBond: activeMemberBonds.size > 0,
     fieldHammers: input.fieldHammers, targetDistance: operator.charId === 'char_4177_brigid' ? 1 : undefined });
-  applyEquips(external, selected, settings.filter(s => s.activeChars >= bonds.get(s.bondId)!.activeCount).length, equipContext(settings));
-  applyGarrisons(external, tier.garrisonIds, settings);
   const moduleId = input.tier === 'b' ? tier.uniEquipId : null;
   const elementModule = moduleId === 'uniequip_002_logos' || moduleId === 'uniequip_003_thorns';
-  const fallback = moduleId === 'uniequip_003_dusk' ? 'SPC-Y 的第二只小自在取决于相邻可部署格，召唤数量、命中与逐只回技均不能由单目标输入确定'
-    : elementModule && external.bondStacks
-      ? '元素爆发跨施放保留，动态盟约层数与元素条的联合状态尚未建模' : undefined;
+  const supplements = elementModule ? selected.filter(item => item.name === '多功能补剂') : [];
+  const initialEquipContext = equipContext(settings);
+  const otherEquips = supplements.length ? selected.filter(item => !supplements.includes(item)) : selected;
+  applyEquips(external, otherEquips, activeBonds.length, initialEquipContext);
+  applyGarrisons(external, tier.garrisonIds, settings);
+  if (supplements.length) {
+    if (activeMemberBonds.size && (external.stacks.length || external.timedStats.length)) {
+      const reason = '另一组属性也随战斗时间变化，保留输入的盟约层数、装备属性进度与元素模组，仅忽略多功能补剂在战斗中新增的盟约层数';
+      record(external, `equip:${supplements[0]!.chessId}`, reason, 0);
+      external.notes.push(`近似：${reason}`);
+      external.assumptions.push(`【多功能补剂】${reason}`);
+    } else applyEquips(external, supplements, activeBonds.length, initialEquipContext);
+  }
+  const fallback = moduleId === 'uniequip_003_dusk' ? 'SPC-Y 的第二只小自在取决于相邻可部署格，召唤数量、命中与逐只回技均不能由单目标输入确定' : undefined;
   if (fallback) external.notes.push(`近似：${fallback}；本组合退回通用模型，未计专属时间轴。`);
   const override = fallback ? undefined : overrides[operator.charId];
   const effectsAt = (damageEvents: number) => {
     const effect = external.bondStacks;
     if (!effect) return external;
     const extra = Math.min(effect.max, damageEvents * effect.perDamage);
-    const updated = settings.map(s => membership.has(s.bondId) && s.activeChars >= bonds.get(s.bondId)!.activeCount ? { ...s, stacks: s.stacks + extra } : s);
+    const updated = settings.map(s => activeMemberBonds.has(s.bondId) ? { ...s, stacks: s.stacks + extra } : s);
     const effects = battleEffects();
     applyBonds(effects, [...bonds.values()], updated, operator, tier, selected);
-    applyEquips(effects, selected, updated.filter(s => s.activeChars >= bonds.get(s.bondId)!.activeCount).length, equipContext(updated));
+    applyEquips(effects, selected, activeBonds.length, equipContext(updated));
     applyGarrisons(effects, tier.garrisonIds, updated);
     // 战斗叠层不能补发部署属性或延长其持续时间。
     effects.timedStats = external.timedStats;
@@ -188,7 +200,7 @@ function simulate(input: CalcInput, windowOnly: boolean, window?: SwiftWindow): 
     };
   }
   // 精建时间轴不读装备叠层、临时盟约层数与限时属性到期时，按触发时刻分段换用对应的静态面板。
-  const ramp = override && !model.nativeRotation ? stackRamp({ external, effectsAt, build, level: spLevel, model, operator: operator.charId }) : undefined;
+  const ramp = override && !model.nativeRotation ? stackRamp({ external, effectsAt, build, level: spLevel, model, operator: operator.charId, elementModule }) : undefined;
   let process = ramp ? ramp.timeline(durationSec, hp) : timeline(model, spLevel, durationSec, hp);
   if (ramp) process.phases = ramp.phases;
   if (window && !windowOnly && external.skillEndSp > 0 && external.skillEndProbability < 1) {
@@ -242,7 +254,7 @@ function simulate(input: CalcInput, windowOnly: boolean, window?: SwiftWindow): 
     const without = { ...external, judgment: undefined };
     const baseEffects = (count: number) => ({ ...effectsAt(count), judgment: undefined });
     const baseline = build(without, baseEffects);
-    const baseRamp = stackRamp({ external: without, effectsAt: baseEffects, build: effects => build(effects, baseEffects), level: spLevel, model: baseline, operator: operator.charId });
+    const baseRamp = stackRamp({ external: without, effectsAt: baseEffects, build: effects => build(effects, baseEffects), level: spLevel, model: baseline, operator: operator.charId, elementModule });
     const baseAt = memo(baseRamp ? baseRamp.at : (t: number) => timeline(baseline, spLevel, t, Infinity).totalDamage);
     const withJudgment = raw;
     const bonus = withJudgment(until) - baseAt(until);
@@ -339,8 +351,7 @@ function simulate(input: CalcInput, windowOnly: boolean, window?: SwiftWindow): 
   // 面板属性与分项保留快照（开技前一刻 / 开技时）。无技能、从不开技、常驻与瞬发技能保持快照口径。
   if (firstSkill && Number.isFinite(firstSkill.start) && model.skill) {
     // 给足最后一点攻击技力的普攻先命中、随后才开技；即使同帧，仍属普通阶段。
-    const openingScale = external.timedDamageScale.reduce((value, step) =>
-      firstSkill.start >= step.from && firstSkill.start < step.until ? value + step.scale - 1 : value, 1);
+    const openingScale = timedDamageScaleAt(external.timedDamageScale, firstSkill.start);
     const before = leftLimit(curveAt, firstSkill.start) + (firstSkill.preCastDamage ?? 0) * openingScale;
     if (firstSkill.start > 1e-9) normal = { ...normal, dps: Math.max(0, before / firstSkill.start) };
     const length = firstSkill.end - firstSkill.start;

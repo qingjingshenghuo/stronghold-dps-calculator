@@ -67,6 +67,22 @@ it('六卡西米尔玛恩纳再由装备取得萨尔贡，原真伤与技能分�
     .toEqual(before.skill!.components.map(c => [c.source, c.dps]));
   expect(after.totalDamage.value - before.totalDamage.value).toBeCloseTo(8 * 600 + 3750);
 });
+it.each([
+  ['char_293_thorns', 'skchr_thorns_3', 'uniequip_003_thorns'],
+  ['char_4133_logos', 'skchr_logos_3', 'uniequip_002_logos'],
+])('没有可加层的所属盟约时，补剂保留 %s 的元素模组和技能输出', (charId, skillId, uniEquipId) => {
+  for (const bonds of [[], [{ bondId: 'arcaneShip', activeChars: 1, stacks: 40 }],
+    [{ bondId: 'suntShip', activeChars: 2, stacks: 40 }]]) {
+    const config = { ...input, charId, skillId, uniEquipId, durationSec: 180, bonds };
+    const base = calculate(config);
+    for (const equip of ['chess_item_3_13_e_a', 'chess_item_3_13_e_b']) {
+      const tonic = calculate({ ...config, equips: [equip] });
+      expect(tonic.model).toBe('override');
+      expect(tonic.totalDamage).toEqual(base.totalDamage);
+      expect(tonic.killTimeSec).toBe(base.killTimeSec);
+    }
+  }
+});
 it('多功能补剂按实际伤害逐层增加已激活盟约，不在开场叠满', () => {
   const o=operators.find(x=>x.charId==='char_4133_logos')!;
   const config={...input,charId:o.charId,skillId:o.skillIds[o.defaultSkillIndex],bonds:[{bondId:'arcaneShip',stacks:0,activeChars:2}]};

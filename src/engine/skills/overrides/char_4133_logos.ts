@@ -3,7 +3,7 @@ import { firstCrossing, swiftRenewal, swiftRefundSucceeds } from '../../swift.ts
 import type { SkillOverride } from './index.ts';
 import type { PhaseResult } from '../../types.ts';
 import { battleEffects } from '../../effects/common.ts';
-import { necrosisProfile } from '../../effects/elemental.ts';
+import { artsContribution, necrosisProfile } from '../../effects/elemental.ts';
 import { integrate, type Segment } from '../../timeline.ts';
 import { arcaneOnly, overrideBase, phase, withFirstSkill } from './shared.ts';
 import { moduleElement, type ElementStage } from './module-element.ts';
@@ -30,15 +30,15 @@ export const logosOverride: SkillOverride = (context, generic) => {
   const ratio = tier.talents.find(slot => slot.blackboard.nums.ep_damage_ratio)?.blackboard.nums.ep_damage_ratio;
   const necrosis = ratio ? necrosisProfile(boss) : undefined;
   const options = { resReductionFixed: -debuff.magic_resistance!, artsHitAdd: debuff.atk_addition! };
-  const make = (active: boolean, scale = 1, fixedInterval?: number, burst = false): PhaseResult => {
+  const make = (active: boolean, scale = 1, fixedInterval?: number, burst = false, effects = e): PhaseResult => {
     const modifiers = active && bb.atk !== undefined ? [{ stat: 'atk' as const, bucket: 'pct' as const, value: bb.atk, source: `skill:${skill.skillId}` }] : [];
-    const p = phase(context, e, { ...options, ownerActions: 1, active, modifiers, scale, elapsed: effectTime, damageEvents });
+    const p = phase(context, effects, { ...options, ownerActions: 1, active, modifiers, scale, elapsed: effectTime, damageEvents });
     // 盟约描述及 PRTS 逻各斯：天赋是独立伤害，逐击行为尚无模式内实测；不允许附加段再触发。
-    const extra = phase(context, arcaneOnly(e), { ...options, active, modifiers, scale: talent.atk_scale, elapsed: effectTime, damageEvents });
+    const extra = phase(context, arcaneOnly(effects), { ...options, active, modifiers, scale: talent.atk_scale, elapsed: effectTime, damageEvents });
     // 单Boss在随机目标池内；Y模组两次独立执行可以选中同一个目标。
     p.components.push(...extra.components.map((c, index) => ({ ...c, label: index ? '语汇演化触发奥术' : '语汇演化（概率期望）', source: index ? c.source : 'talent:logos:1', hitsPerAttack: c.hitsPerAttack * proc, hitsPerSec: c.hitsPerSec * proc, dps: c.dps * proc })));
     if (burst) {
-      const element = phase(context, arcaneOnly(e), { ...options, type: 'elemental', active, modifiers, scale: talent.element_atk_scale, hits: proc, elapsed: effectTime, damageEvents });
+      const element = phase(context, arcaneOnly(effects), { ...options, type: 'elemental', active, modifiers, scale: talent.element_atk_scale, hits: proc, elapsed: effectTime, damageEvents });
       element.components[0]!.label = '语汇演化·爆发期元素伤害';
       element.components[0]!.source = 'talent:logos:elemental';
       p.components.push(...element.components);
@@ -94,7 +94,7 @@ export const logosOverride: SkillOverride = (context, generic) => {
   if (ratio && necrosis) {
     const stage = (duration: number, active: boolean, scale = 1, interval?: number): ElementStage => ({ duration, active,
       executeBelow: active && model.duration === Infinity ? model.skill!.stats.atk * bb['attack@kill_atk_scale']! : undefined,
-      phase: (events, time, burst) => { damageEvents = events; effectTime = time; return make(active, scale, interval, burst); } });
+      phase: (events, time, burst, effects) => { damageEvents = events; effectTime = time; return make(active, scale, interval, burst, effects); } });
     const interval = bb['attack@cooldown'], stacks = bb['attack@max_stack_cnt'];
     const casts = interval && stacks ? [...Array.from({ length: stacks }, (_, index) =>
       stage(interval, true, bb['attack@atk_scale_base']! + (index + .5) * bb['attack@atk_scale_delta']!, interval)),
@@ -105,9 +105,9 @@ export const logosOverride: SkillOverride = (context, generic) => {
     if (interval) model.notes.push('近似：提喻爬升按每个固定攻击间隔的中点积分凋亡积累。');
     const finite = model.duration !== Infinity;
     casts[0] = { ...casts[0]!, cast: true };
-    return moduleElement(model, necrosis, panel => ratio * panel.components.reduce((sum, hit) => sum + (hit.damageType === 'arts' ? hit.dps : 0), 0),
+    return moduleElement(model, necrosis, panel => ratio * artsContribution(panel.components),
       [stage(first, false), ...casts], finite ? [stage(recharge, false), ...casts] : [], finite ? probability >= 1 ? quick : recharge : null, undefined,
-      finite && probability > 0 ? { probability, quick: [stage(quick, false), ...casts] } : undefined);
+      finite && probability > 0 ? { probability, quick: [stage(quick, false), ...casts] } : undefined, context.effectsAt);
   }
   model.customTimeline = (duration, hp) => {
     e = initialEffects; effectTime = 0; damageEvents = 0;

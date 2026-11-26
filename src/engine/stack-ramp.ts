@@ -20,6 +20,7 @@ interface RampInput {
   level: SkillLevelData;
   model: GenericModel;
   operator: string;
+  elementModule?: boolean;
 }
 
 export interface BondEventClock {
@@ -68,8 +69,8 @@ export function bondEventClock(external: BattleEffects, model: GenericModel, fir
  * 与迅捷判定序号（阶段序号相同，第 k 次技能结束取第 k 次判定）都由前一区间继承，开技时刻随攻速叠层正确推迟或提前。
  * 来源：模型假设。
  */
-export function stackRamp({ external, effectsAt, build, level, model, operator }: RampInput) {
-  const bond = external.bondStacks && !tracksBondStacks.has(operator) ? external.bondStacks : undefined;
+export function stackRamp({ external, effectsAt, build, level, model, operator, elementModule }: RampInput) {
+  const bond = !elementModule && !tracksBondStacks.has(operator) ? external.bondStacks : undefined;
   const timed = tracksTimedStats.has(operator) ? [] : [...new Set(external.timedStats.map(t => t.until).filter(t => Number.isFinite(t) && t > 0))];
   if (!external.stacks.length && !bond && !timed.length) return;
   const base = timeline(model, level, 180, Infinity);

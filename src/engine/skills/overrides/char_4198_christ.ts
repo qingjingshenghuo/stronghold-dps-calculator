@@ -1,7 +1,7 @@
 import { actionModel, duelAttack } from './duel-attack.ts';
 import { duelClock } from './duel-clock.ts';
 import { actionDamage } from './shared.ts';
-import { damage } from '../../damage.ts';
+import { artsFraction, damage } from '../../damage.ts';
 import { bossAttackInterval } from '../../effects/boss-attack.ts';
 import { necrosisProfile } from '../../effects/elemental.ts';
 
@@ -23,7 +23,8 @@ export const override = actionModel(['只计自身造成的神经损伤；麻痹
       const value=actionDamage(p);
       if(st.time<unlock)return value*amplify;
       if(one&&st.active){
-        gauge+=p.components[0]!.perHit*b['attack@ep_damage_ratio']!*profile.buildupMultiplier;
+        const hit=p.components[0]!;
+        gauge+=hit.perHit*artsFraction(hit)*b['attack@ep_damage_ratio']!*profile.buildupMultiplier;
         if(gauge>=profile.threshold){gauge=0;unlock=st.time+10;stacks=ctx.boss.attributes?.immunities.palsyImmune?0:3;return value+elemental(6000);}
       }
       return value;

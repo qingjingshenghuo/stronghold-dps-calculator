@@ -138,9 +138,19 @@ describe('终极维式重锤按场上重锤计算（慕斯进阶 S2，boss_1）'
     // A = 626.6 × 2 = 1253.2；有效法抗 25 × 0.7 = 17.5，单段 A × 0.825 = 1033.9。
     expect(five.normal.stats.atk).toBeCloseTo(base.normal.stats.atk * 2, 8);
     expect(five.normal.components[0]!.perHit).toBeCloseTo(five.normal.stats.atk * 0.825, 8);
-    // 逐击基础合计 246199.3641。每累计 20000 法伤爆条，七次 7000；
-    // 各 10 秒锁条段的法术倍率从 .825 变为 .965，七段合计多 16217.4822。
-    expect(five.totalDamage.value).toBeCloseTo(246199.364122938 + 7 * 7000 + 16217.482239971, 6);
+    // 逐击分段积分：每 29/30 秒判一次二连击，[50,90)、[170,180) 的攻击力为 2.45A，其余为 2A。
+    // 累计 20000 法伤触发爆发，跳过随后 10 秒再积累。七次越过阈值的时刻独立用有理数积分求出。
+    const triggers = [15.149672131, 40.949016392, 63.996136943, 87.327574435, 113.126918697, 138.926262958, 163.818536844];
+    const at = (durationSec: number) => run('char_185_frncat', 'skchr_frncat_2', 'b', [['终极维式重锤']], { fieldHammers: all, durationSec }).totalDamage.value;
+    for (const t of triggers) {
+      const jump = at(t + .0001) - at(t - .0001);
+      // 0.0002 秒内的连续法伤不足 1 点；爆条扣 7000 点。
+      expect(jump).toBeGreaterThan(7000);
+      expect(jump).toBeLessThan(7001);
+    }
+    // 逐击基础合计 246199.3641。锁条时法术倍率从 .825 变为 .965，七段共增加 16217.4822。
+    // 每次求根精度为 1e-8 秒；将每段边界的时间误差折成伤害后，校验到万分位。
+    expect(five.totalDamage.value).toBeCloseTo(246199.364122938 + 7 * 7000 + 16217.482239971, 4);
     expect(mousse().totalDamage.value).toBeCloseTo(five.totalDamage.value, 6);
     expect(five.assumptions!.join('')).toContain('按场上 5 种');
     expect(mousse().assumptions!.join('')).toContain('默认场上有 5 种');

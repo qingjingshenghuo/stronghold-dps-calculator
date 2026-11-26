@@ -18,27 +18,27 @@ export const thornsOverride: SkillOverride = (context, generic) => {
   const bb = level.blackboard.nums;
   const source = `skill:${skill.skillId}`;
   const talent = tier.talents[0]!.blackboard.nums;
-  const poisonAt = (damageEvents: number, active = false, modifiers: StatModifier[] = []) => {
-    const result = phase(context, arcaneOnly(e), { type: 'arts', scale: 0, damageEvents, active, modifiers,
+  const poisonAt = (damageEvents: number, active = false, modifiers: StatModifier[] = [], effects = e) => {
+    const result = phase(context, arcaneOnly(effects), { type: 'arts', scale: 0, damageEvents, active, modifiers,
       attackAdd: talent['damage[normal]']!, fixedInterval: 1 });
     result.components[0]!.label = '神经腐蚀（不叠加）';
     result.components[0]!.source = 'talent:thorns:1';
     return result;
   };
   const poison = poisonAt(0);
-  const make = (active: boolean, second = false, damageEvents = 0) => {
+  const make = (active: boolean, second = false, damageEvents = 0, effects = e) => {
     const modifiers = [{ stat: 'atk' as const, bucket: 'pct' as const, value: active ? bb[second ? 'thorns_s_3[b].atk' : 'atk'] ?? 0 : 0, source },
       { stat: 'attackSpeed' as const, bucket: 'direct' as const, value: active ? bb[second ? 'thorns_s_3[b].attack_speed' : 'attack_speed'] ?? 0 : 0, source }];
-    const p = phase(context, e, { ownerActions: 1, active, damageEvents, type: 'physical', modifiers });
+    const p = phase(context, effects, { ownerActions: 1, active, damageEvents, type: 'physical', modifiers });
     const moduleScale = tier.trait?.blackboard.nums.atk_scale_m ?? 0;
     if (moduleScale) {
-      const module = phase(context, arcaneOnly(e), { active, damageEvents, type: 'arts', scale: moduleScale, modifiers });
+      const module = phase(context, arcaneOnly(effects), { active, damageEvents, type: 'arts', scale: moduleScale, modifiers });
       module.components[0]!.source = `module:${tier.uniEquipId}`;
       module.components[0]!.label = '模组逐击法术伤害';
       p.components.push(...module.components);
     }
     const coverage = Math.min(1, talent.duration! / p.stats.attackInterval);
-    const dot = damageEvents || active ? poisonAt(damageEvents, active, modifiers) : poison;
+    const dot = damageEvents || active ? poisonAt(damageEvents, active, modifiers, effects) : poison;
     p.components.push(...dot.components.map(hit => ({ ...hit, dps: hit.dps * coverage, hitsPerSec: hit.hitsPerSec * coverage })));
     p.dps = p.components.reduce((sum, c) => sum + c.dps, 0);
     return p;
@@ -74,12 +74,14 @@ export const thornsOverride: SkillOverride = (context, generic) => {
     const profile = { ...necrosisProfile(context.boss), duration: 10 };
     const burst = damage({ attack: 6000, type: 'elemental', epDamageResistance: context.boss.attributes?.epDamageResistance, target: context.boss });
     const stage = (duration: number, active: boolean, second = false): ElementStage => ({ duration, active,
-      phase: events => make(active, second, events) });
+      phase: (events, _time, _burst, effects) => make(active, second, events, effects) });
     const silent = model.skill!;
     const cast = (waited: number): ElementStage[] => {
       if (!s2) return [{ ...stage(level.duration, true), cast: true }];
       const linger = waited > 0 ? Math.min(level.duration, talent.duration!) : 0;
-      return [{ duration: linger, active: true, cast: true, phase: events => poisonAt(events) },
+      // 残毒保留每秒一跳的频率；技能面板仍显示停攻时的本体间隔。
+      return [{ duration: linger, active: true, cast: true, phase: (events, _time, _burst, effects) =>
+        ({ ...poisonAt(events, false, [], effects), stats: silent.stats }) },
         { duration: level.duration - linger, active: true, phase: () => silent }];
     };
     // 迅捷：每次技能真实结束时按固定判定序列判定一次；成功时这一轮回复只需补足 消耗 − 回技。
@@ -93,7 +95,7 @@ export const thornsOverride: SkillOverride = (context, generic) => {
     return moduleElement(model, profile, panel => ratio * panel.components.reduce((sum, hit) => sum + (hit.damageType === 'physical' || hit.damageType === 'arts' ? hit.dps : 0), 0),
       opening, permanent ? [] : repeat, probability >= 1 ? quick : recharge, { label: '神经损伤爆发', source: 'elemental:neural', damageType: 'elemental', countsTowardDps: true,
         perHit: burst.perHit, hitsPerAttack: 1, hitsPerSec: 0, dps: 0, derivation: burst.derivation },
-      !permanent && probability > 0 ? { probability, quick: quickRepeat } : undefined);
+      !permanent && probability > 0 ? { probability, quick: quickRepeat } : undefined, context.effectsAt);
   }
   model.customTimeline = (duration, hp) => ({ ...integrateWithCasts(prefix, repeat, duration, hp),
     cycle: permanent ? { spRecoverSec: recovery, skillDurationSec: Infinity, avgDps: permanent.dps }

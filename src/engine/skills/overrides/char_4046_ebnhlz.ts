@@ -1,5 +1,5 @@
 import { operatorAttack, instant } from './operator-attack.ts';
-import { necrosisProfile } from '../../effects/elemental.ts';
+import { artsContribution, necrosisProfile } from '../../effects/elemental.ts';
 
 // 来源：干员当前阶级的特性、天赋及所选技能黑板；卫戍属性由公共入口注入。
 export const ebnhlzOverride = operatorAttack('arts', ({ ctx, n, b, talent, hit, add, notes }) => {
@@ -17,5 +17,5 @@ export const ebnhlzOverride = operatorAttack('arts', ({ ctx, n, b, talent, hit, 
   const profile = necrosisProfile(ctx.boss);
   notes.push('凋亡模组以本体已结算的法术伤害积累损伤，沿各次施放保留元素条，爆发期间每秒结算元素伤害（PRTS 元素）。');
   return { ...rotation, sequence:{ element:{ ...profile, burstDps:profile.dps,
-    rate:p => ratio * p.components.filter(c => c.damageType === 'arts' && (c.source === 'attack' || c.source.startsWith('skill:'))).reduce((sum,c) => sum + c.dps,0) } } };
+    rate:p => ratio * artsContribution(p.components.filter(c => c.source === 'attack' || c.source.startsWith('skill:'))) } } };
 });
