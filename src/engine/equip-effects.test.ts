@@ -58,10 +58,14 @@ describe('精准狙击镜', () => {
     expect(scoped.skill!.dps).toBeCloseTo(base.skill!.dps * 1.5, 8);
   });
   it('与维多利亚/谢拉格盟约增伤分区相乘', () => {
-    // 法术 1000、法抗 0：盟约增伤 1.2 × 狙击镜 1.5 = 1800（同区加算才会是 1700）。
+    // 法术 1000、法抗 0：维多利亚 1.25 × 谢拉格 1.35 × 狙击镜 1.5。
     const e = apply('精准狙击镜', 'b');
-    const modifiers = [...e.modifiers, { group: '盟约增伤（维多利亚/谢拉格）', kind: 'increase' as const, value: 0.2 }];
-    expect(damage({ attack: 1000, type: 'arts', resistance: 0, modifiers }).perHit).toBeCloseTo(1800, 8);
+    const modifiers = [
+      ...e.modifiers,
+      { group: '盟约增伤（维多利亚）', kind: 'increase' as const, value: 0.25 },
+      { group: '盟约增伤（谢拉格）', kind: 'increase' as const, value: 0.35 },
+    ];
+    expect(damage({ attack: 1000, type: 'arts', resistance: 0, modifiers }).perHit).toBeCloseTo(2531.25, 8);
   });
   it('同名狙击镜携带多件时每件各自相乘', () => {
     // 两件进阶：1.5 × 1.5 = 2.25（同区加算会是 2.0）；普通 + 进阶：1.3 × 1.5 = 1.95。

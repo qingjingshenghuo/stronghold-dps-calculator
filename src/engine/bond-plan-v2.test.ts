@@ -4,7 +4,6 @@ import operatorsJson from '../data/generated/operators.json';
 import { calculate } from './calc.ts';
 import { applyBonds } from './effects/bonds.ts';
 import { battleEffects } from './effects/common.ts';
-import { damage } from './damage.ts';
 import { swiftDraw, swiftSucceeds } from './swift.ts';
 import type { BondData, BondSetting, OperatorData } from './types.ts';
 
@@ -121,14 +120,22 @@ describe('逐盟约', () => {
     expect(r.normal.components[0]!.derivation.some(s => s.label.includes('默认敌人始终处于寒冷或冻结'))).toBe(true);
   });
 
-  it('维多利亚增伤与谢拉格增伤同一乘区加算', () => {
-    // 哈洛德同属两盟约，带 1 件装备：1 + 0.25 + 0.35 = 1.60，而不是 1.25 × 1.35 = 1.6875。
-    const o = operators.find(x => x.charId === 'char_4114_harold')!;
-    const e = battleEffects();
-    const equip = { chessId: 'x', tier: 'a' as const, name: '测试装备', desc: '', trapId: '', effectId: '', shopLevel: 1, giveBondId: null, buffs: [], image: null };
-    applyBonds(e, bonds, [bond('victoriaShip', 3, 0), bond('kjeragShip', 3, 0)], o, o.tiers.b, [equip]);
-    const hit = damage({ attack: 1000, type: 'true', modifiers: e.modifiers });
-    expect(hit.perHit).toBeCloseTo(1600, 9);
+  it('灵知携带维式重锤和变形同构体，普攻同时获得维多利亚与谢拉格的乘算增伤', () => {
+    const config = { ...base, charId: 'char_206_gnosis', skillId: 'skchr_gnosis_1',
+      equips: ['chess_item_1_01_e_a', 'chess_item_6_03_e_a'] };
+    const normal = (...bonds: BondSetting[]) => calculate({ ...config, bonds }).normal;
+    const victoria = bond('victoriaShip', 3, 0);
+    const kjerag = bond('kjeragShip', 3, 0);
+    const baseline = normal().dps;
+    expect(baseline).toBeGreaterThan(0);
+    expect(normal(victoria).dps / baseline).toBeCloseTo(1.25, 9);
+    expect(normal(kjerag).dps / baseline).toBeCloseTo(1.35, 9);
+    const both = normal(victoria, kjerag);
+    expect(both.dps / baseline).toBeCloseTo(1.25 * 1.35, 9);
+    expect(both.components[0]!.derivation).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: '盟约增伤（维多利亚）', op: 'mul', value: 1.25 }),
+      expect.objectContaining({ label: '盟约增伤（谢拉格）', op: 'mul', value: 1.35 }),
+    ]));
   });
 
   it('贝洛内吃叙拉古 6 人：默认敌人有 2 种以上异常状态，每秒 800 真伤计入本成员', () => {

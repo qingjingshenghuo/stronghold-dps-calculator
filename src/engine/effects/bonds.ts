@@ -11,7 +11,7 @@ export function stacked(n: Record<string, number>, name: string, stacks: number)
 export const bondCoverage: Record<string, Coverage> = {
   yanShip: { status: '已建模', reason: '攻击百分比；强化随机元素损伤不计入扣血 DPS，忽略并注明' },
   sargonShip: { status: '已建模', reason: '成员从开场全程按攻速上限计，首次开技后计入自身一块常驻流沙的周期法伤和技能期额外法伤' },
-  victoriaShip: { status: '已建模', reason: '带装备时增伤（与谢拉格同区加算）；强化按普通/进阶装备数量进百分比加攻区；赠送装备不计' },
+  victoriaShip: { status: '已建模', reason: '带装备时增伤（与谢拉格分区相乘）；强化按普通/进阶装备数量进百分比加攻区；赠送装备不计' },
   kjeragShip: { status: '已建模', reason: '默认敌人始终寒冷或冻结，增伤取额外增伤并随层数提升；强化雪山巨人忽略' },
   egirShip: { status: '部分', reason: '吞噬基础攻击力由输入给定；生命/复活不计' },
   siracusaShip: { status: '已建模', reason: '部署限时攻速按真实时限；默认强化按敌人始终有2种以上异常状态每秒真伤计入成员；裁度按概率限时真伤' },
@@ -36,8 +36,6 @@ export const bondCoverage: Record<string, Coverage> = {
   docShip: { status: '与 DPS 无关', reason: '回复生命/元素损伤及庇护' },
   arcaneShip: { status: '部分', reason: '成员逐伤害附加法伤；强化后全场从开场起按减抗上限计（模型假设）' },
 };
-/** 维多利亚与谢拉格的盟约增伤同一乘区加算。 */
-const bondDamageGroup = '盟约增伤（维多利亚/谢拉格）';
 const core = new Set(['yanShip','sargonShip','victoriaShip','kjeragShip','egirShip','siracusaShip','kazimierzShip','ursusShip','iberiaShip','lethaniaShip']);
 /** 实际的盟约成员身份，去重并保留自身盟约在前。 */
 export function memberBondIds(operator: OperatorData, equipChessIds: string[], equips: EquipData[]): string[] {
@@ -75,7 +73,7 @@ export function applyBonds(e: BattleEffects, data: BondData[], settings: BondSet
       note(label);
       e.assumptions.push(`【${b.name}】${display}`);
     };
-    const inc = (scale: number, group = source) => e.modifiers.push({ group, kind: 'increase', value: scale - 1, source });
+    const inc = (scale: number) => e.modifiers.push({ group: `盟约增伤（${b.name}）`, kind: 'increase', value: scale - 1, source });
     // 全场效果先于成员专属效果结算。
     if (b.bondId === 'arcaneShip' && power) {
       const enemy = b.buffs[1].blackboard.nums;
@@ -133,16 +131,15 @@ export function applyBonds(e: BattleEffects, data: BondData[], settings: BondSet
         break;
       }
       // “携带装备…伤害提升”；“每携带1件装备攻击力提升，携带进阶装备时额外提升”。
-      // 维多利亚增伤与谢拉格增伤同一乘区加算，与装备增伤（狙击镜等）分区相乘；6 人加攻进百分比加攻区。
       case 'victoriaShip':
-        if (equips.length) inc(val('damage_scale'), bondDamageGroup);
+        if (equips.length) inc(val('damage_scale'));
         if (power) stat('atk', equips.reduce((sum, x) => sum + n.atk_normal_equip + (x.tier === 'b' ? n.atk_golden_equip : 0), 0));
         break;
       // “造成的伤害提升，对寒冷、冻结敌人获得额外提升（受层数影响）”：模型假设敌人始终寒冷或冻结，
       // 取 base_ex_damage_scale + ex_damage_scale_per_stack × 层数 代替基础 base_damage_scale（不叠乘）。
       case 'kjeragShip': {
         const scale = n.base_ex_damage_scale + n.ex_damage_scale_per_stack * s.stacks;
-        inc(scale, bondDamageGroup);
+        inc(scale);
         assume(`谢拉格：默认敌人始终处于寒冷或冻结，伤害倍率取 ${n.base_ex_damage_scale} + ${n.ex_damage_scale_per_stack}×层数`, scale, '默认敌人始终处于寒冷或冻结');
         if (power) assume('六人谢拉格：雪山巨人伤害忽略', 0, '雪人伤害忽略');
         break;
